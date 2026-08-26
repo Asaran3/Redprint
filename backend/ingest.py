@@ -32,8 +32,16 @@ def ingest_pdf_code(file_path: str, city_name: str, code_section: str):
     for page_num, page in enumerate(doc):
         full_text += page.get_text()
         
-    # Clean and split text into logical paragraph chunks (filtering out small fragments)[cite: 1]
-    chunks = [chunk.strip() for chunk in full_text.split("\n\n") if len(chunk.strip()) > 50]
+    # Keep embedding requests below OpenAI's 8,192-token input limit.
+    chunks = []
+    for paragraph in full_text.split("\n\n"):
+        paragraph = paragraph.strip()
+        if len(paragraph) <= 50:
+            continue
+        chunks.extend(
+            paragraph[index:index + 12000]
+            for index in range(0, len(paragraph), 12000)
+        )
     
     print(f"Extracted {len(chunks)} chunks from {file_path}. Uploading to Supabase...")
     
