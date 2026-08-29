@@ -1,54 +1,39 @@
 import os
-import pymupdf
-from openai import OpenAI
 from dotenv import load_dotenv
+from openai import OpenAI
 from database import engine
 from sqlalchemy import text
+from enterprise_parser import parse_pdf_enterprise
 
-# Load environment variables from .env file
 load_dotenv()
-
-# Initialize OpenAI client for embedding generation
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def get_embedding(text_content: str):
-    """Generates vector embeddings for a given text chunk using OpenAI's embedding model."""
+    """Generates vector embeddings for a text chunk using OpenAI."""
     response = client.embeddings.create(
         input=[text_content],
         model="text-embedding-3-small"
     )
     return response.data[0].embedding
 
-def ingest_pdf_code(file_path: str, city_name: str, code_section: str):
-    """Parses a local municipal code PDF, chunks the text, and stores vectors in Supabase."""
-    if not os.path.exists(file_path):
-        print(f"Error: File '{file_path}' not found.")
+def run_smart_ingestion(pdf_path: str, city_name: str):
+    """Orchestrates ingestion using the 3 advanced enterprise parsing implementations."""
+    print(f"Starting smart enterprise ingestion for: {pdf_path} ({city_name})")
+    
+    parsed_chunks = parse_pdf_enterprise(pdf_path, city_name)
+    
+    if not parsed_chunks:
+        print("No valid chunks were extracted from the document.")
         return
 
-    doc = pymupdf.open(file_path)
-    full_text = ""
+    print(f"Embedding and uploading {len(parsed_chunks)} substantive chunks to Supabase pgvector...")
     
-    # Extract text from all pages of the PDF document[cite: 1]
-    for page_num, page in enumerate(doc):
-        full_text += page.get_text()
-        
-    # Keep embedding requests below OpenAI's 8,192-token input limit.
-    chunks = []
-    for paragraph in full_text.split("\n\n"):
-        paragraph = paragraph.strip()
-        if len(paragraph) <= 50:
-            continue
-        chunks.extend(
-            paragraph[index:index + 12000]
-            for index in range(0, len(paragraph), 12000)
-        )
-    
-    print(f"Extracted {len(chunks)} chunks from {file_path}. Uploading to Supabase...")
-    
-    # Connect to your Supabase PostgreSQL database and insert chunks with their vectors[cite: 1]
     with engine.connect() as connection:
-        for chunk in chunks:
-            embedding = get_embedding(chunk)
+        for item in parsed_chunks:
+            chunk_text = item["content"]
+            section_label = item["section"]
+            
+            embedding = get_embedding(chunk_text)
             
             connection.execute(
                 text("""
@@ -57,16 +42,14 @@ def ingest_pdf_code(file_path: str, city_name: str, code_section: str):
                 """),
                 {
                     "city": city_name,
-                    "section": code_section,
-                    "text": chunk,
+                    "section": section_label,
+                    "text": chunk_text,
                     "embedding": str(embedding)
                 }
             )
         connection.commit()
         
-    print("Ingestion complete! Code chunks successfully stored in Supabase vector database.")
+    print("Ingestion complete! Clean substantive code chunks successfully stored in pgvector.")
 
 if __name__ == "__main__":
-    # Test execution: Place a sample building code PDF in your /backend folder
-    # Example: ingest_pdf_code("sample_building_code.pdf", "San Francisco", "Chapter 10 - Means of Egress")
-    pass
+    run_smart_ingestion("SampleCodeDoc.pdf", city_name="San Francisco")
